@@ -1,0 +1,478 @@
+---
+title: "ParturitionTimingSampleCode"
+author: "JuliaSunga"
+date: "17/01/2022"
+output: pdf_document
+---
+#Change Point Analysis - Individual Bats (Figure 1)
+This first chunk is used to estimate the changepoint for each bat in each year. The data set used has already been filtered to only include individuals meeting the minimum criteria as described in the manuscript. It is important that this is done one year at a time as the date cut-off is specific to each year. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+load("allindependentreads.RData") 
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(changepoint)
+###once only the needed reads are selected, count the number of independent reads for each bat on each evening_of
+###do the following one year at a time
+
+#select which year of data to use
+females2012 <- independentreads %>% subset(reader_year==2014)
+
+
+visitcount<-females2012 %>% group_by(pit, readereveningof, box) %>% count()
+
+#Add in the zeros for days where no nighttime revists were recorded
+
+#so want the last day to be the last day the bat was seen OR August 1st, whichever comes first 
+visitcount2<-visitcount %>% mutate(readereveningof=as.Date(readereveningof)) %>% group_by(pit) %>% 
+  #for each individual fill the inbetweens with 0's
+  tidyr::complete(readereveningof = seq.Date(min(as.Date(readereveningof)), max(as.Date(readereveningof)), by="day")) %>% 
+  #only take observations up to August 1st if available otherwise only fills until the last day the bat has records 
+  filter(readereveningof<"2014-08-05") #adjust the year here to match what is selected to run
+
+#set NA's in n to 0
+visitcount2$n[is.na(visitcount2$n)] <- 0
+
+#take only maximum on any given day and keep the id of which box that was
+visitcount3<-visitcount2 %>% group_by(pit, readereveningof) %>% filter(n==max(n))
+
+#there may be some double rows where the revisit numbers are tied. good for visualization but messes up the breakpoint function 
+visitcount4<-visitcount2 %>% group_by(pit, readereveningof) %>% slice(which.max(n))
+
+###for each individual, generate a histogram of number of reads by evening_of
+#list of values to loop over
+uniq_bats<-as.factor(unique(visitcount4$pit))
+
+#create empty table to fill with loop outputs
+pdatelist<-data.frame(pit=character(), readereveningof=as.Date(character(0)), box=character(), n=numeric())
+
+
+#this loop will generate a histogram saved to a folder for each year and create a table of the noted change points
+for(i in uniq_bats){
+
+  onebat<-filter(visitcount4, pit==i)
+  brk.pt1<-cpt.mean(onebat$n, param.estimates=TRUE, method="AMOC", penalty="Asymptotic", pen.value=0.05, class=TRUE)
+  pdate<-onebat[(as.numeric(cpts(brk.pt1))+1),]
+  pdatelist<-rbind(pdatelist, pdate)
+  temp_plot<-ggplot(onebat, aes(x=readereveningof, y=n, fill=box))+scale_y_continuous(limits = c(0,max(onebat$n)), expand = c(0, 0))+ggtitle(i)+
+    geom_bar(stat="identity")+geom_vline(xintercept=pdate$readereveningof, color="red", size=1, linetype="dashed")+theme_classic()
+  ggsave(temp_plot, file=paste0("2014 Histograms/plot_", "2014", i, ".png"), width=14, height=10, units="cm")
+  
+  
+}
+
+#those that return NAs for changepoint location get dropped and therefore those possibly non reproductive bats don't get a row in pdatelist
+pit<-uniq_bats
+pit<-data.frame(pit)
+
+#this line will add bats with no changepoint back into our final list so that this is recorded
+fullpdatelist<-merge(x = pdatelist, y = pit, by = "pit", all = TRUE)
+
+##save as csv, add column for year, rename readereveningof to pdate 
+##repeat for all years before joining with summary data file 
+write.csv(fullpdatelist, "2014temp_parturitiondates.csv")
+
+```
+
+Once that chunk is done, a manual check was performed for any spurious conclusiosn about partuirtion date due to a single day with a large number of revisits. See manuscript for the critera for correcting these instances. 
+
+#Change Point Analysis - Population Level
+This next piece is used to calculate a population level changepoint. This also must be done 1 year at a time and, as before, the year must be changed in the code both for subsetting the data and for setting the cut-off date. 
+
+```{r}
+load("allindependentreads.RData") 
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(changepoint)
+
+
+###############Population Level revisit patterns
+
+#select the year to run
+females2019 <- independentreads %>% subset(reader_year==2019)
+
+
+visitcount<-females2019 %>% group_by(pit, readereveningof, box) %>% count()
+
+#I also think I need to put the zeroes in for all of these bats - make sure to change dates here for each year
+
+#so want the last day to be the last day the bat was seen OR August 1st, whichever comes first 
+visitcount2<-visitcount %>% mutate(readereveningof=as.Date(readereveningof)) %>% group_by(pit) %>% 
+  #for each individual fill the inbetweens with 0's
+  tidyr::complete(readereveningof = seq.Date(min(as.Date(readereveningof)), max(as.Date(readereveningof)), by="day")) %>% 
+  #only take observations up to August 1st if available otherwise only fills until the last day the bat has records 
+  filter(readereveningof<"2019-08-05") #set the cut-off date
+
+#need to remove observations after this date
+
+#set NA's in n to 0
+visitcount2$n[is.na(visitcount2$n)] <- 0
+
+#take only maximum on any given day and keep the id of which box that was
+visitcount3<-visitcount2 %>% group_by(pit, readereveningof) %>% filter(n==max(n))
+#there may be some double rows where the revisit numbers are tied. good for visualization but messes up the breakpoint function 
+visitcount4<-visitcount2 %>% group_by(pit, readereveningof) %>% slice(which.max(n))
+
+#summarise the mean number of revisits on each day across all individuals
+poplevel<-visitcount4 %>% group_by(readereveningof) %>% summarise(mean=mean(n, na.rm=TRUE))
+
+#plot the means in a barplot
+barplot(poplevel$mean~ poplevel$readereveningof, xlab="Date", ylab="Mean nighttime revisits")
+
+#calculate the changepoint for the population
+brk.pt1<-cpt.mean(poplevel$mean, param.estimates=TRUE, method="AMOC", penalty="Asymptotic", pen.value=0.05, class=TRUE)
+poplevel[(as.numeric(cpts(brk.pt1))+1),]
+
+
+```
+
+
+#Figure 3
+Code to generate the boxplot of parturition dates in each year
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+#read in all years of parturition dates once they have been manually checked/validated
+
+#merge all of these files
+allpdate<-rbind(pdates2012, pdates2013, pdates2014, pdates2015, pdates2016, pdates2017, pdates2018, pdates2019, pdates2021)
+#join capture location back into this by the pit 
+
+
+#read in a data table containing the information on each individual, specifically where they were each captured
+summarydata<-read.csv(file.choose())
+
+#reduce parturition summary data to just pit and capture location
+captureloc<-summarydata %>% select(pit, capture_area) %>% unique()
+
+#join capture location back into the parturition data
+allpdate2<-merge(allpdate, captureloc, by="pit")
+
+#plot range of parturition dates in each year 
+##convert update_pdate to doy
+allpdate2$pdoy<-strftime(allpdate2$update_pdate, format="%j") #this removes the information on year for that particular column but year is still stored in a separate column
+
+# for 2012 and 2016, need to -1 from pdoy
+allpdate3<-allpdate2 %>% mutate(pdoy=ifelse(year=="2012"|year=="2016", as.numeric(pdoy)-1, as.numeric(pdoy)))
+allpdate4<-allpdate3 %>% filter(!(year== "2021" & capture_area =="pynnsbrook") & !(year=="2013" & capture_area=="pynnsbrook"))
+
+newrows<-data.frame(c(2013,2015, 2016, 2017, 2018, 2021), "pynnsbrook", NA)
+names(newrows)<-c("year", "capture_area", "pdoy")
+
+library(plyr)
+allpdate5<-rbind.fill(allpdate4, newrows)
+
+
+ppoints<-read.csv("parturitionpoints.csv")
+
+give.n <- function(x){
+  return(c(y = max(x)+3, label = length(x))) }
+
+ggplot(allpdate5, aes(y=as.Date(as.numeric(pdoy), origin=as.Date("2018-01-01")), x=as.factor(year), fill=capture_area)) + 
+  geom_boxplot(aes(fill=capture_area), position=position_dodge(preserve="single")) + coord_flip() + theme_bw() + xlab("Year") + ylab("Day of the Year") + scale_fill_discrete(name="Location") + 
+  scale_y_date(limits=as.Date(c("2018-06-10", "2018-08-10")))  + scale_fill_manual(labels = c("Pynn's Brook", "Salmonier Nature Park"),values = c("grey", "white")) + labs(fill="Location") +
+  geom_point(data=ppoints, colour='black', position=position_nudge(x=-.25, y=0)) + 
+  stat_summary(fun.data = give.n, data=allpdate3, geom = "text", fun.y=max,  position = position_dodge(width = 0.75))
+
+#then need to manually remove the boxes that shouldn't be there for pynns brook 2021 and 2013. 
+
+
+```
+
+#Figures 2 and 5
+The following code is used to create the figures pertaining to bats with parturition date estimates in multiple years
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+#the following uses the merged data on pdates as used in the above chunk for figure 3
+
+#read in all years of parturition dates once they have been manually checked/validated
+
+#merge all of these files
+allpdate<-rbind(pdates2012, pdates2013, pdates2014, pdates2015, pdates2016, pdates2017, pdates2018, pdates2019, pdates2021)
+#join capture location back into this by the pit 
+
+
+#read in a data table containing the information on each individual, specifically where they were each captured
+summarydata<-read.csv(file.choose())
+
+#reduce parturition summary data to just pit and capture location
+captureloc<-summarydata %>% select(pit, capture_area) %>% unique()
+
+#join capture location back into the parturition data
+allpdate2<-merge(allpdate, captureloc, by="pit")
+
+#plot range of parturition dates in each year 
+##convert update_pdate to doy
+allpdate2$pdoy<-strftime(allpdate2$update_pdate, format="%j") #this removes the information on year for that particular column but year is still stored in a separate column
+
+
+###############BATS WITH MULTIPLE YEARS
+###look into how many bats have parturition dates in multiple years
+allpdatebats<-allpdate2 %>% drop_na(update_pdate) #change this to refer to the dataframe with locations back in 
+
+yearcount<-allpdatebats %>% dplyr::count(pit)
+yearcount2<-merge(yearcount, captureloc, by="pit")
+
+
+##########FIGURE 2##############
+#histogram of number of bats with different numbers of years of data, separated by location 
+yearcount3<-yearcount2 %>% group_by(n, capture_area) %>% dplyr::count()
+#need to add 0's for years 4, 5, 6, and 7 for Pynn's brook
+
+#create frame
+newrows <- data.frame(c(4,5,6,7), "pynnsbrook", 0)      
+
+#Naming the Data Frame - Step 2  
+names(newrows)<-c("n", "capture_area", "nn")
+
+
+yearcount3<-rbind(yearcount3, newrows)
+
+
+ggplot(data=yearcount3, aes(y=nn, x=n, fill=capture_area)) + geom_bar(stat="identity", position=position_dodge(), color="black")+ theme_bw() + xlab("Number of Years") +  ylab("Frequency") + scale_x_continuous(breaks=seq(0,7,1)) + scale_y_continuous(limits=c(0, 120)) + 
+  scale_fill_manual(labels = c("Pynn's Brook", "Salmonier Nature Park"),values = c("grey", "white")) + labs(fill="Location") 
+
+
+hist(yearcount2$n, labels=TRUE, ylim=c(0, 200), xlab="# of Years", main="", ylab="# of Individuals")
+
+
+###########FIGURE 5################
+#only include individuals who have at least 2 years of data
+#select pits with more than 1 year of pdates
+yearcountmultiple<-yearcount2 %>% filter(n>1)
+
+#pull those dates from allpdatebats
+multipdate<-allpdatebats[allpdatebats$pit %in% yearcountmultiple$pit,]
+unique(multipdate$pit)
+
+#separate by location 
+pynnmulti<-multipdate %>% filter(capture_area=="pynnsbrook")
+
+salmmulti<-multipdate %>% filter(capture_area=="salmoniernp")
+
+
+
+#set a gradient scale for colouring the years - change the number of steps for each plot
+
+#Pynns Brook
+cc <- scales::seq_gradient_pal("blue", "red", "Lab")(seq(0,1,length.out=4))
+
+ggplot(pynnmulti, aes(y=as.Date(as.numeric(pdoy), origin=as.Date("2018-01-01")), x=as.factor(pit))) + 
+  geom_point(aes(col=as.factor(year)), size=4) + coord_flip() + theme_bw() + xlab("Indvidual ID") + ylab("Day of the Year") +
+ scale_y_date(limits=as.Date(c("2018-06-25", "2018-08-10"))) +    scale_colour_manual(values=cc) + labs(colour="Year")
+
+#Salmonier Nature Park
+cc <- scales::seq_gradient_pal("blue", "red", "Lab")(seq(0,1,length.out=10))
+
+ggplot(salmmulti, aes(y=as.Date(as.numeric(pdoy), origin=as.Date("2018-01-01")), x=reorder(salmmulti$pit, salmmulti$pdoy, mean))) + 
+  geom_point(aes(col=as.factor(year)), size=4) + coord_flip() + theme_bw() + xlab("Individual ID") + ylab("Day of the Year") +
+  scale_y_date(limits=as.Date(c("2018-06-25", "2018-08-10"))) +    scale_colour_manual(values=cc) + labs(colour="Year") +  theme(axis.text.y = element_text(size=7))
+
+### repeat above but scale to median in each year
+
+
+#pull in a table of the mean for each location and year
+mediandates<-allpdate3 %>% group_by(year, capture_area) %>% summarise(median=median(as.numeric(pdoy), na.rm=TRUE))
+
+#join to the existing multipdate table 
+multimedian<-merge(multipdate, mediandates)
+
+#calculate difference between update pdate and median pdate 
+multimedian$difference<-as.numeric(multimedian$pdoy)-multimedian$median
+
+#separate by location 
+pynnmulti2<-multimedian %>% filter(capture_area=="pynnsbrook")
+
+salmmulti2<-multimedian %>% filter(capture_area=="salmoniernp")
+
+#plot this difference 
+cc <- scales::seq_gradient_pal("blue", "red", "Lab")(seq(0,1,length.out=4))
+
+ggplot(pynnmulti2, aes(y=difference, x=as.factor(pit))) + geom_point(aes(col=as.factor(year)), size=4) + coord_flip()+
+  theme_bw() + xlab("Individual ID") + ylab("Difference from Median in Days") + scale_colour_manual(values=cc) + labs(colour="Year") + geom_hline(yintercept=0, col="black", size=1.5)
+
+cc <- scales::seq_gradient_pal("blue", "red", "Lab")(seq(0,1,length.out=10))
+ggplot(salmmulti2, aes(y=difference, x=as.factor(pit))) + geom_point(aes(col=as.factor(year)), size=4) + coord_flip()+
+  theme_bw() + xlab("Individual ID") + ylab("Difference from Median in Days") + scale_colour_manual(values=cc) + labs(colour="Year") +geom_hline(yintercept=0, col="black", size=1.5)
+
+##
+```
+
+
+#AIC Analysis
+Prior to running this code, weather data needs to be pulled and summarised from the desired database. That data is then joined to the allpdates dataframe used above, such that each row has information on the individual, the estimated parturition date, the year, and the corresponding weather variables desired. That code is not included here as it is highly dependent on the weather data that is desired and the format of the weather data acquired. 
+```{r}
+library(lme4)
+library(MuMIn)
+library(dplyr)
+
+
+alldata$pdoy<-as.numeric(alldata$pdoy)
+aicdata<-alldata %>% filter(pdoy!="NA") #take only those with parturition dates
+
+#build candidate models
+weather2<-lmer(pdoy~precip + temp + inter + windprop +  (1|pit) + (1|reader_year), data=aicdata)
+torpor2<-lmer(pdoy~precip + temp + inter + (1|pit) + (1|reader_year), data=aicdata)
+experience2<-lmer(pdoy~(1|pit) + corrected_age + (1|reader_year), data=aicdata)
+location2<-lmer(pdoy~(1|pit) + capture_area + (1|reader_year), data=aicdata)
+global2<-lmer(pdoy~precip + temp + inter + windprop +  (1|pit) + (1|reader_year)+ corrected_age + capture_area, data=aicdata)
+null<-glm(pdoy~1, data=aicdata)
+
+##look at parturition location
+allpdate2 %>% dplyr::group_by(pit, update_box) %>% dplyr::count() %>% na.omit() ->plocationinfo
+
+locationsperbat<-plocationinfo %>% dplyr::group_by(pit) %>% dplyr::count()
+
+r.squaredGLMM(weather2)
+r.squaredGLMM(global2)
+
+MuMIn::AICc(null, weather2, torpor2, experience2, location2, global2, k=2)
+
+averages<-MuMIn::model.avg(weather2, global2)
+
+coefTable(averages, full=TRUE)
+
+#checking for normality
+res_weather2<-residuals(weather2)
+qqnorm(res_weather2)
+
+res_global2<-residuals(global2)
+qqnorm(res_global2)
+
+res_torpor2<-residuals(torpor2)
+qqnorm(res_torpor2)
+
+
+```
+
+
+#Capture Validation
+Capture validation code is included but the database on capture information has not been shared due to future use in other studies. Please note that this code is highly dependent on the format of that database. A subset of that database would then require none of the shown subsetting code and so is not useful as an example to other users. Briefly, some code for subsetting information and checking reproductive status agreement is shared below. 
+```{r}
+library(dplyr)
+
+#make sure to have hte summary data and allpdates from the previous year
+
+###now bring in the capture database 
+
+recaptures<-read.csv("31-Master_capture db,up_to_2021,21dec2021.csv")
+
+#rename reader_year to year
+summarydata %>% rename(year=reader_year)->summarydata
+summarydata$year<-as.factor(summarydata$year)
+allpdate$year<-as.factor(allpdate$year)
+
+fulldata<-summarydata %>% right_join(allpdate, by=c("year", "pit"))
+#limit the recapture data to only the pit tags that are included in the parturition date estimates (fulldata)
+relevantrecaptures<-recaptures[recaptures$pit %in% fulldata$pit,]
+
+#just keep the columns we need
+recapturestrimmed<-relevantrecaptures %>% subset(., select=c(pit, eveningof_ymd, Site, reproductive))
+
+#create a column for year
+recapturestrimmed$year<-as.factor(as.numeric(format(as.POSIXct(recapturestrimmed$eveningof_ymd), format="%Y")))
+
+#create a massive dataset by merging these where there is a row for every capture for a bat 
+bigdata<-recapturestrimmed %>% right_join(fulldata, by=c("year", "pit"))
+
+#calculate the difference between eveningof_ymd (capture date) and update_pdate (suspected parturition)
+bigdata$datedif<-as.numeric(abs(as.POSIXct(bigdata$eveningof_ymd)-as.POSIXct(bigdata$update_pdate)))
+
+#keep just those with datedif of about a month 
+bigdataclose<-bigdata %>% filter(., datedif<=20)
+
+#need to add a group by and take the minimum datedif for each pit and year cause some have multiple recaptures in a year, then update presentation 
+bigdataclose<-bigdataclose %>% group_by(pit, year) %>% slice_min(datedif)
+
+#how many of these bats are lactating before suspected parturition or pregnant after 
+bigdataclose$before<-bigdataclose$eveningof_ymd<bigdataclose$update_pdate
+
+#lactation/pregnancy timing check
+bigdataclose$agreement<-(bigdataclose$before==TRUE & bigdataclose$reproductive=="pregnant" | bigdataclose$before==FALSE & bigdataclose$reproductive=="lactating")
+
+
+#for non-reproductive individuals find by pulling datedif=NA
+bigdatanop<-dplyr::filter(bigdata,is.na(datedif)) 
+
+#within these, pull records where capture date is between July 5th and July 30th
+library(lubridate)
+bigdatanopcaptures<-bigdatanop %>% filter((day(eveningof_ymd) >= 20 & month(eveningof_ymd) == 6)| (day(eveningof_ymd) <= 30 & month(eveningof_ymd) ==  7)) 
+#if statement for agreement - Agreement = TRUE if reproductive = NA & update_pdate=NA
+
+
+
+
+```
+
+#Pup Movement - Figure 4
+
+This code is used to create Figure 4 based on manually collected data of the number of instances of different distances of suspected pup movement based on a change in the most frequently visited roost box on any given night. 
+```{r}
+
+#separate dataframes as 2021 was added later - these were created through manual inspection of the data
+switchdata<-read.csv("switchdata.csv")
+switch2021<-read.csv("2021switch.csv")
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+
+#want average number of each type of switch by location 
+#remove any bat where update_pdate is NA
+
+
+switchdataclean<-switchdata %>% select(pit, capture_area, update_pdate, box_switch, pole_switch, hqvc_switch, hb_switch) %>% tidyr::drop_na(update_pdate)
+
+switch2021clean<-switch2021 %>% select(pit, capture_area, update_pdate, box_switch, pole_switch, hqvc_switch, hb_switch) %>% tidyr::drop_na(update_pdate)
+switchclean2<-rbind(switchdataclean, switch2021clean)
+
+#fill the rest of the NAs with 0's
+switchclean2[is.na(switchclean2)] <- 0
+
+switch0<-switchclean2 %>% filter(box_switch==0 & pole_switch==0 & hqvc_switch==0 & hb_switch==0)
+83/487
+
+switchbox<-switchclean2 %>% filter(box_switch>0)
+266/487
+
+switchpole<-switchclean2 %>% filter(pole_switch>0)
+227/487
+
+
+#snp only
+switchsnp<-switchclean2 %>% filter(capture_area=="salmoniernp")
+switchsnphq<-switchsnp %>% filter(hqvc_switch>0)
+128/408
+
+switchhb<-switchsnp %>% filter(hb_switch>0)
+14/408
+
+#convert to long 
+switchlong<- gather(switchdataclean, switchtype, count, box_switch, pole_switch, hqvc_switch, hb_switch, factor_key=TRUE)
+
+#reorder factor levels
+switchlong$capture_area <- factor(switchlong$capture_area, levels = c("salmoniernp", "pynnsbrook"))
+
+levels(switchlong$capture_area)
+#
+ggplot(switchlong, aes(x=switchtype, y=count, fill=as.factor(capture_area)))+geom_boxplot(outlier.size=3, position=position_dodge(preserve="single"))+theme_bw()+ xlab("Switch Distance") + ylab("Number of Switches Per Bat Per Year") +
+  scale_fill_manual(labels = c("Salmonier Nature Park", "Pynn's Brook"),values = c("white", "grey")) + labs(fill="Location") +
+  scale_x_discrete(labels=c("box_switch" = "Box", "pole_switch" = "Pole", "hqvc_switch" = "Zone (HQ to VC)", "hb_switch" = "Zone (HB to HQ/VC)"))
+
+
+
+
+```
+
